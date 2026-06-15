@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS alarm CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci;
-USE alarmx;
+CREATE DATABASE IF NOT EXISTS alarmdb CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci;
+USE alarmdb;
 
 CREATE TABLE IF NOT EXISTS `users` (
   `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
