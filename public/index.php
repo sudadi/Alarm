@@ -77,6 +77,92 @@ function role_from_dashboard_request(?string $requestedRole, ?string $currentRol
     return $currentRole;
 }
 
+function json_response(array $payload, int $statusCode = 200): never
+{
+    http_response_code($statusCode);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function json_request_payload(): array
+{
+    $rawPayload = file_get_contents('php://input');
+    $payload = json_decode($rawPayload === false ? '' : $rawPayload, true);
+
+    if (!is_array($payload)) {
+        json_response([
+            'ok' => false,
+            'error' => 'Payload JSON tidak valid.',
+        ], 400);
+    }
+
+    return $payload;
+}
+
+function load_env_file(string $path): void
+{
+    if (!is_file($path)) {
+        return;
+    }
+
+    foreach (file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+
+        if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+            continue;
+        }
+
+        [$key, $value] = explode('=', $line, 2);
+        $key = trim($key);
+        $value = trim($value, " \t\n\r\0\x0B\"'");
+
+        if ($key !== '' && getenv($key) === false) {
+            putenv($key . '=' . $value);
+        }
+    }
+}
+
+function require_api_key(): void
+{
+    load_env_file(__DIR__ . '/../.env');
+
+    $expectedApiKey = (string) getenv('API_KEY');
+    $providedApiKey = trim((string) ($_SERVER['HTTP_X_API_KEY'] ?? ''));
+
+    if ($expectedApiKey === '') {
+        json_response([
+            'ok' => false,
+            'error' => 'API key server belum dikonfigurasi.',
+        ], 500);
+    }
+
+    if ($providedApiKey === '' || !hash_equals($expectedApiKey, $providedApiKey)) {
+        json_response([
+            'ok' => false,
+            'error' => 'API key tidak valid.',
+        ], 401);
+    }
+}
+
+function normalized_button_type(mixed $button): ?string
+{
+    return match (strtolower(trim((string) $button))) {
+        'red' => 'Red',
+        'blue' => 'Blue',
+        default => null,
+    };
+}
+
+function normalized_alarm_state(mixed $state): ?string
+{
+    return match (strtoupper(trim((string) $state))) {
+        'ON' => 'ON',
+        'OFF' => 'OFF',
+        default => null,
+    };
+}
+
 $alarmRepository = new AlarmRepository();
 $userRepository = new UserRepository();
 $currentUser = current_user();
@@ -109,6 +195,79 @@ if ($page === 'api/dashboard') {
         'dashboard_role' => $requestedRole,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     exit;
+}
+
+if ($page === 'api/device') {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        json_response([
+            'ok' => false,
+            'error' => 'Method tidak diizinkan. Gunakan POST.',
+        ], 405);
+    }
+
+    require_api_key();
+
+    $payload = json_request_payload();
+    $btnCode = trim((string) ($payload['code_button'] ?? ''));
+    $ip = trim((string) ($payload['ip'] ?? ''));
+
+    if ($btnCode === '' || strlen($btnCode) > 10) {
+        json_response([
+            'ok' => false,
+            'error' => 'code_button wajib diisi dan maksimal 10 karakter.',
+        ], 422);
+    }
+
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
+        json_response([
+            'ok' => false,
+            'error' => 'ip tidak valid.',
+        ], 422);
+    }
+
+    try {
+        if (array_key_exists('button', $payload) || array_key_exists('status', $payload)) {
+            $button = normalized_button_type($payload['button'] ?? null);
+            $state = normalized_alarm_state($payload['status'] ?? null);
+
+            if ($button === null || $state === null) {
+                json_response([
+                    'ok' => false,
+                    'error' => 'button harus Red/Blue dan status harus ON/OFF.',
+                ], 422);
+            }
+
+            $result = $alarmRepository->recordButtonState($btnCode, $button, $state, $ip);
+
+            json_response([
+                'ok' => true,
+                'message' => 'State alarm berhasil diterima.',
+                'data' => $result,
+            ]);
+        }
+
+        $deviceType = trim((string) ($payload['device_type'] ?? ''));
+
+        if (strtolower($deviceType) !== 'button') {
+            json_response([
+                'ok' => false,
+                'error' => 'device_type harus Button untuk payload heartbeat.',
+            ], 422);
+        }
+
+        json_response([
+            'ok' => true,
+            'message' => 'Ping device berhasil diterima.',
+            'data' => [
+                'device' => $alarmRepository->recordDevicePing($btnCode, $ip),
+            ],
+        ]);
+    } catch (Throwable $throwable) {
+        json_response([
+            'ok' => false,
+            'error' => 'Gagal memproses payload device.',
+        ], 500);
+    }
 }
 
 if ($page === 'login' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -181,7 +340,7 @@ if ($page === 'users' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'toggle') {
-        $userRepository->toggleActive((int) ($_POST['id'] ?? 0), isset($_POST['is_active']));
+        $userRepository->toggleActive((int) ($_POST['id'] ?? 0), (bool) ((int) ($_POST['is_active'] ?? 0)));
         flash('success', 'Status user berhasil diperbarui.');
     }
 

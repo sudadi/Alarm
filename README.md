@@ -9,6 +9,7 @@ Aplikasi monitoring alarm codered dan codeblue berbasis PHP, MySQL, dan Bootstra
 - Log history alarm
 - Manage user dengan role `codered`, `codeblue`, dan `admin`
 - Endpoint polling JSON untuk refresh dashboard
+- Endpoint POST JSON untuk menerima data button dari Arduino
 
 ## Struktur
 
@@ -34,4 +35,46 @@ Contoh:
 
 ```bash
 php -S 127.0.0.1:8000 -t public
+```
+
+## API Device
+
+Endpoint:
+
+```text
+POST /?page=api/device
+Content-Type: application/json
+X-API-Key: isi_dari_API_KEY_di_env
+```
+
+Payload update state alarm:
+
+```json
+{
+  "client_id": "arduino_PB_12",
+  "code_button": "BTN12",
+  "button": "Red",
+  "status": "ON",
+  "ip": "192.168.118.12"
+}
+```
+
+Payload heartbeat device:
+
+```json
+{
+  "client_id": "arduino_PB_12",
+  "code_button": "BTN12",
+  "device_type": "Button",
+  "ip": "192.168.118.12"
+}
+```
+
+Contoh test:
+
+```bash
+curl -X POST 'http://127.0.0.1:8000/?page=api/device' \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Key: change-me-arduino-secret' \
+  -d '{"client_id":"arduino_PB_12","code_button":"BTN12","button":"Red","status":"ON","ip":"192.168.118.12"}'
 ```

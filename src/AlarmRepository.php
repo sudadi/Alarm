@@ -4,6 +4,82 @@ declare(strict_types=1);
 
 final class AlarmRepository
 {
+    public function recordDevicePing(string $btnCode, string $ip): array
+    {
+        $this->ensureDevice($btnCode, $ip);
+
+        $statement = Database::pdo()->prepare(
+            "UPDATE btn_devices SET ip = :ip, last_ping = NOW(), status = 'Connected' WHERE btn_code = :btn_code"
+        );
+        $statement->execute([
+            'btn_code' => $btnCode,
+            'ip' => $ip,
+        ]);
+
+        return $this->deviceByCode($btnCode) ?? [];
+    }
+
+    public function recordButtonState(string $btnCode, string $button, string $state, string $ip): array
+    {
+        $pdo = Database::pdo();
+        $this->ensureDevice($btnCode, $ip);
+
+        $pdo->beginTransaction();
+
+        try {
+            $deviceStatement = $pdo->prepare(
+                "UPDATE btn_devices SET ip = :ip, last_ping = NOW(), status = 'Connected' WHERE btn_code = :btn_code"
+            );
+            $deviceStatement->execute([
+                'btn_code' => $btnCode,
+                'ip' => $ip,
+            ]);
+
+            $currentState = $this->stateByCodeAndType($btnCode, $button);
+            $stateStatement = $pdo->prepare(
+                'UPDATE btn_state SET state = :state WHERE btn_code = :btn_code AND btn_type = :btn_type'
+            );
+            $stateStatement->execute([
+                'btn_code' => $btnCode,
+                'btn_type' => $button,
+                'state' => $state,
+            ]);
+
+            if ($stateStatement->rowCount() === 0) {
+                $insertState = $pdo->prepare(
+                    'INSERT INTO btn_state (btn_code, btn_type, state) VALUES (:btn_code, :btn_type, :state)'
+                );
+                $insertState->execute([
+                    'btn_code' => $btnCode,
+                    'btn_type' => $button,
+                    'state' => $state,
+                ]);
+            }
+
+            if ($state === 'ON' && $currentState !== 'ON') {
+                $logStatement = $pdo->prepare(
+                    'INSERT INTO btn_log (btn_code, btn_type) VALUES (:btn_code, :btn_type)'
+                );
+                $logStatement->execute([
+                    'btn_code' => $btnCode,
+                    'btn_type' => strtolower($button),
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (Throwable $throwable) {
+            $pdo->rollBack();
+            throw $throwable;
+        }
+
+        return [
+            'btn_code' => $btnCode,
+            'btn_type' => $button,
+            'state' => $state,
+            'device' => $this->deviceByCode($btnCode),
+        ];
+    }
+
     public function createDevice(array $data): void
     {
         $pdo = Database::pdo();
@@ -98,5 +174,34 @@ final class AlarmRepository
             'active_red' => (int) $pdo->query("SELECT COUNT(*) FROM btn_state WHERE btn_type = 'Red' AND state = 'ON'")->fetchColumn(),
             'active_blue' => (int) $pdo->query("SELECT COUNT(*) FROM btn_state WHERE btn_type = 'Blue' AND state = 'ON'")->fetchColumn(),
         ];
+    }
+
+    private function ensureDevice(string $btnCode, string $ip): void
+    {
+        if ($this->deviceByCode($btnCode) !== null) {
+            return;
+        }
+
+        $this->createDevice([
+            'btn_code' => $btnCode,
+            'location' => $btnCode,
+            'ip' => $ip,
+            'status' => 'Connected',
+        ]);
+    }
+
+    private function stateByCodeAndType(string $btnCode, string $btnType): ?string
+    {
+        $statement = Database::pdo()->prepare(
+            'SELECT state FROM btn_state WHERE btn_code = :btn_code AND btn_type = :btn_type LIMIT 1'
+        );
+        $statement->execute([
+            'btn_code' => $btnCode,
+            'btn_type' => $btnType,
+        ]);
+
+        $state = $statement->fetchColumn();
+
+        return $state === false ? null : (string) $state;
     }
 }
