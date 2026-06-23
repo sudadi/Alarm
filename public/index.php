@@ -11,6 +11,7 @@ require __DIR__ . '/../src/Database.php';
 require __DIR__ . '/../src/helpers.php';
 require __DIR__ . '/../src/Auth.php';
 require __DIR__ . '/../src/AlarmRepository.php';
+require __DIR__ . '/../src/DeviceMessageHandler.php';
 require __DIR__ . '/../src/UserRepository.php';
 
 function dashboard_page_for_role(string $role): string
@@ -145,25 +146,8 @@ function require_api_key(): void
     }
 }
 
-function normalized_button_type(mixed $button): ?string
-{
-    return match (strtolower(trim((string) $button))) {
-        'red' => 'Red',
-        'blue' => 'Blue',
-        default => null,
-    };
-}
-
-function normalized_alarm_state(mixed $state): ?string
-{
-    return match (strtoupper(trim((string) $state))) {
-        'ON' => 'ON',
-        'OFF' => 'OFF',
-        default => null,
-    };
-}
-
 $alarmRepository = new AlarmRepository();
+$deviceMessageHandler = new DeviceMessageHandler($alarmRepository);
 $userRepository = new UserRepository();
 $currentUser = current_user();
 $page = $_GET['page'] ?? ($currentUser ? dashboard_page_for_role((string) $currentUser['role']) : 'login');
@@ -208,60 +192,20 @@ if ($page === 'api/device') {
     require_api_key();
 
     $payload = json_request_payload();
-    $btnCode = trim((string) ($payload['code_button'] ?? ''));
-    $ip = trim((string) ($payload['ip'] ?? ''));
-
-    if ($btnCode === '' || strlen($btnCode) > 10) {
-        json_response([
-            'ok' => false,
-            'error' => 'code_button wajib diisi dan maksimal 10 karakter.',
-        ], 422);
-    }
-
-    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-        json_response([
-            'ok' => false,
-            'error' => 'ip tidak valid.',
-        ], 422);
-    }
 
     try {
-        if (array_key_exists('button', $payload) || array_key_exists('status', $payload)) {
-            $button = normalized_button_type($payload['button'] ?? null);
-            $state = normalized_alarm_state($payload['status'] ?? null);
-
-            if ($button === null || $state === null) {
-                json_response([
-                    'ok' => false,
-                    'error' => 'button harus Red/Blue dan status harus ON/OFF.',
-                ], 422);
-            }
-
-            $result = $alarmRepository->recordButtonState($btnCode, $button, $state, $ip);
-
-            json_response([
-                'ok' => true,
-                'message' => 'State alarm berhasil diterima.',
-                'data' => $result,
-            ]);
-        }
-
-        $deviceType = trim((string) ($payload['device_type'] ?? ''));
-
-        if (strtolower($deviceType) !== 'button') {
-            json_response([
-                'ok' => false,
-                'error' => 'device_type harus Button untuk payload heartbeat.',
-            ], 422);
-        }
+        $result = $deviceMessageHandler->handle($payload);
 
         json_response([
             'ok' => true,
-            'message' => 'Ping device berhasil diterima.',
-            'data' => [
-                'device' => $alarmRepository->recordDevicePing($btnCode, $ip),
-            ],
+            'message' => $result['message'],
+            'data' => $result['data'],
         ]);
+    } catch (InvalidArgumentException $exception) {
+        json_response([
+            'ok' => false,
+            'error' => $exception->getMessage(),
+        ], 422);
     } catch (Throwable $throwable) {
         json_response([
             'ok' => false,
